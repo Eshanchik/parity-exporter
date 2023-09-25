@@ -1,6 +1,4 @@
 import { Registry, Gauge } from 'prom-client';
-// tslint:disable-next-line:no-submodule-imports
-import { hashObject } from 'prom-client/lib/util';
 import express = require('express');
 import { makeRequest, IPrometheusClient, ICreateMetrics } from './helpers';
 import * as http from 'http';
@@ -39,46 +37,55 @@ function createMetrics(registry: Registry, nodeURL: string): ICreateMetrics {
       'Current Block of Parity Node',
       []
     ),
-    parityUp: createGauge('parity_up', 'Parity up/down', [])
+    parityUp: createGauge('parity_up', 'Parity up/down', []),
+    enodeAddress: createGauge(
+      'parity_enode_address',
+      'Ethereum Node Address (enode URL)',
+      []
+    ), 
   };
 
   return async () => {
-    const [
-      clientVersion,
-      syncInfo,
-      latestBlockNumber,
-      peersInfo
-    ] = await Promise.all([
-      makeRequest(nodeURL, 'web3_clientVersion'),
-      makeRequest(nodeURL, 'eth_syncing'),
-      makeRequest(nodeURL, 'eth_blockNumber'),
-      makeRequest(nodeURL, 'parity_netPeers')
-    ]);
+    try {
+      const [
+        clientVersion,
+        syncInfo,
+        latestBlockNumber,
+        peersInfo
+      ] = await Promise.all([
+        makeRequest(nodeURL, 'web3_clientVersion'),
+        makeRequest(nodeURL, 'eth_syncing'),
+        makeRequest(nodeURL, 'eth_blockNumber'),
+        makeRequest(nodeURL, 'parity_enode') 
+      ]);
 
-    // See if call failed
-    if (clientVersion === false) {
-      gauges.parityUp.set(0);
-      return;
+      if (clientVersion === false) {
+        gauges.parityUp.set(0);
+        return;
+      }
+
+      gauges.parityUp.set(1);
+      gauges.version.set({ value: clientVersion }, 1);
+
+      if (syncInfo !== false) {
+        const current = parseInt(syncInfo.currentBlock, 16);
+        const highest = parseInt(syncInfo.highestBlock, 16);
+        gauges.syncStatus.set(highest - current);
+      } else {
+        gauges.syncStatus.set(0);
+      }
+
+      gauges.currentBlock.set(parseInt(latestBlockNumber, 16));
+      gauges.activePeers.set(peersInfo.active);
+      gauges.connectedPeers.set(peersInfo.connected);
+      gauges.maxPeers.set(peersInfo.max);
+
+      if (peersInfo.enode) {
+        const enodeURL = peersInfo.enode;
+        gauges.enodeAddress.set({ value: enodeURL }, 1);
+      }
+    } catch (error) {
+      console.error('Failed to fetch node info:', error);
     }
-
-    gauges.parityUp.set(1);
-    // blocknumber
-    gauges.currentBlock.set(parseInt(latestBlockNumber, 16));
-    // version
-    gauges.version.set({ value: clientVersion }, 1);
-
-    // syncInfo
-    if (syncInfo !== false) {
-      const current = parseInt(syncInfo.currentBlock, 16);
-      const highest = parseInt(syncInfo.highestBlock, 16);
-      gauges.syncStatus.set(highest - current);
-    } else {
-      gauges.syncStatus.set(0);
-    }
-
-    // peers
-    gauges.activePeers.set(peersInfo.active);
-    gauges.connectedPeers.set(peersInfo.connected);
-    gauges.maxPeers.set(peersInfo.max);
   };
 }
